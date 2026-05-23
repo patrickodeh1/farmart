@@ -1,0 +1,11 @@
+{
+    "name": "botble/rezgo-connector",
+    "description": "Rezgo Booking API integration for Botble Farmart",
+    "type": "package",
+    "require": {},
+    "autoload": {
+        "psr-4": {
+            "Botble\\RezgoConnector\\": "src/"
+        }
+    }
+}

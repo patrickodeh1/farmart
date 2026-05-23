@@ -1,0 +1,20 @@
+{
+  "id": "soarersavannah/rezgo-plugin",
+  "name": "Rezgo Connector",
+  "namespace": "Botble\\RezgoConnector\\",
+  "version": "1.0.0",
+  "author": "Soarer Savannah",
+  "url": "https://soarer.xyz/",
+  "description": "Automated real-time integration between Farmart eCommerce and Rezgo Booking API. Synchronizes orders, products, and booking data seamlessly.",
+  "keywords": [
+    "rezgo",
+    "booking",
+    "integration",
+    "synchronization",
+    "tickets",
+    "tours"
+  ],
+  "provider": "Botble\\RezgoConnector\\Providers\\RezgoConnectorServiceProvider",
+  "minimum_core_version": "5.0.0",
+  "require": []
+}
