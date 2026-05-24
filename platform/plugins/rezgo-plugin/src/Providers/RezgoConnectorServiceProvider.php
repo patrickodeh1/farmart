@@ -39,6 +39,15 @@ class RezgoConnectorServiceProvider extends ServiceProvider
                 $app->make(\Botble\RezgoConnector\Services\RezgoApiService::class)
             );
         });
+
+        // Rebind Cart with our subclass that preserves Rezgo prices during refresh()
+        $this->app->singleton(\Botble\Ecommerce\Cart\Cart::class, function ($app) {
+            $cart = new \Botble\RezgoConnector\Cart\RezgoCart(
+                $app['session'],
+                $app['events']
+            );
+            return $cart;
+        });
     }
 
     public function boot(): void
@@ -211,8 +220,6 @@ class RezgoConnectorServiceProvider extends ServiceProvider
         // add_action cannot override it because OrderHelper calls $product->price()->getPrice()
         // which goes through this filter — so we intercept here instead.
         add_filter('product_prices_price_value', function ($price, $product) {
-            $trace = collect(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 8))->map(fn($f) => ($f['class'] ?? '') . '::' . ($f['function'] ?? '') . ':' . ($f['line'] ?? ''))->implode(' | ');
-            \Log::info('Rezgo price filter fired', ['price' => $price, 'rezgo_total' => request()->input('extras.rezgo_total'), 'product_id' => $product->id, 'trace' => $trace]);
             $rezgoTotal = (float) request()->input('extras.rezgo_total', 0);
             $rezgoUid   = request()->input('extras.rezgo_uid');
 
@@ -224,18 +231,18 @@ class RezgoConnectorServiceProvider extends ServiceProvider
                 }
             }
 
-            // Secondary path: Cart::refresh() re-reads prices from DB, losing our total.
-            // Recover it from the extras stored in the cart item session.
-            $cart = \Botble\Ecommerce\Facades\Cart::instance('cart');
-            foreach ($cart->content() as $cartItem) {
-                if ((int)$cartItem->id === (int)$product->id) {
-                    $savedTotal = (float)($cartItem->options->extras['rezgo_total'] ?? 0);
-                    if ($savedTotal > 0) {
-                        return round($savedTotal, 2);
+            // Secondary path: Cart::refresh() and checkout re-read prices from DB.
+            // Session stores CartItem objects — access as object properties.
+            $cartSession = session()->get('cart.cart', []);
+            foreach ($cartSession as $item) {
+                if ((int)$item->id === (int)$product->id) {
+                    $extras = is_array($item->options) ? $item->options['extras'] ?? [] : $item->options->extras ?? [];
+                    $savedPrice = (float)($extras['rezgo_blended_price'] ?? 0);
+                    if ($savedPrice > 0) {
+                        return round($savedPrice, 2);
                     }
                 }
             }
-
             return $price;
         }, 10, 2);
 
