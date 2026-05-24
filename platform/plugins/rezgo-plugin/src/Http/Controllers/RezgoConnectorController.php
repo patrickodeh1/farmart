@@ -80,23 +80,38 @@ class RezgoConnectorController extends BaseController
                     ->where('is_active', true)
                     ->first();
 
-                // Use rezgo_price if mapped, otherwise use product price
-                $pricePerItem = $mapping ? $mapping->rezgo_price : ($productModel ? $productModel->price : 0);
-                $lineTotal = $pricePerItem * ($product->quantity ?? 1);
-                $orderTotal += $lineTotal;
+                // Read what the customer actually paid from order_product options/extras
+                $productOptions = [];
+                if (!empty($product->options)) {
+                    $productOptions = is_string($product->options) ? json_decode($product->options, true) : (array)$product->options;
+                }
+                $extras = $productOptions['extras'] ?? [];
+                $customerTotal      = (float)($extras['rezgo_total'] ?? 0);
+                $customerAdultPrice = (float)($extras['rezgo_price'] ?? 0);
+                $customerChildPrice = (float)($extras['rezgo_child_price'] ?? 0);
+                $customerAdultQty   = (int)($extras['rezgo_adult_qty'] ?? 0);
+                $customerChildQty   = (int)($extras['rezgo_child_qty'] ?? 0);
+
+                // Display price: what customer paid, fallback to markup price
+                $displayPrice = $customerTotal > 0 ? $customerTotal : ($mapping ? $mapping->rezgo_price : ($productModel ? $productModel->price : 0));
+                $orderTotal += $displayPrice;
 
                 $orderedProducts[] = [
-                    'product_id'     => $product->product_id,
-                    'product_name'   => $productModel ? $productModel->name : 'Unknown',
-                    'product_price'  => $productModel ? $productModel->price : 0,
-                    'quantity'       => $product->quantity ?? 1,
-                    'rezgo_uid'      => $mapping ? $mapping->rezgo_uid : null,
-                    'rezgo_tour'     => $mapping ? $mapping->rezgo_uid : null,
-                    'rezgo_title'    => $mapping ? $mapping->rezgo_title : null,
-                    'rezgo_price'    => $mapping ? $mapping->rezgo_price : 0,
-                    'passenger_type' => $mapping ? $mapping->passenger_type : null,
-                    'mapped'         => $mapping ? true : false,
-                    'availability'   => 0,
+                    'product_id'        => $product->product_id,
+                    'product_name'      => $productModel ? $productModel->name : 'Unknown',
+                    'product_price'     => $productModel ? $productModel->price : 0,
+                    'quantity'          => $product->quantity ?? 1,
+                    'rezgo_uid'         => $mapping ? $mapping->rezgo_uid : null,
+                    'rezgo_tour'        => $mapping ? $mapping->rezgo_uid : null,
+                    'rezgo_title'       => $mapping ? $mapping->rezgo_title : null,
+                    'rezgo_price'       => $displayPrice,
+                    'rezgo_adult_price' => $customerAdultPrice,
+                    'rezgo_child_price' => $customerChildPrice,
+                    'rezgo_adult_qty'   => $customerAdultQty,
+                    'rezgo_child_qty'   => $customerChildQty,
+                    'passenger_type'    => $mapping ? $mapping->passenger_type : null,
+                    'mapped'            => $mapping ? true : false,
+                    'availability'      => 0,
                 ];
             }
 

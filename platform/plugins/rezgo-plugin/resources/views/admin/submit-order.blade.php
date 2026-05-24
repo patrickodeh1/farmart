@@ -67,27 +67,13 @@
                                             <td>
                                                 <div class="small">
                                                     @foreach ($order['products'] as $product)
-                                                        @php
-                                                            $availability = isset($tourAvailability[$product['rezgo_tour']]) 
-                                                                ? $tourAvailability[$product['rezgo_tour']]['availability'] 
-                                                                : 'Unknown';
-                                                            $hasAvailability = is_numeric($availability) && $availability > 0;
-                                                        @endphp
-                                                        <div>
+                                                            <div>
                                                             <span class="badge bg-{{ $product['mapped'] ? 'success' : 'warning' }} text-white">
                                                                 {{ $product['product_name'] }} (x{{ $product['quantity'] }})
                                                             </span>
                                                             @if ($product['mapped'])
                                                                 <br><small class="text-muted">
                                                                     → {{ $product['rezgo_title'] }}
-                                                                    @if ($product['rezgo_price'] > 0)
-                                                                        <span class="badge bg-primary text-white ms-1">${{ number_format($product['rezgo_price'], 2) }}</span>
-                                                                    @endif
-                                                                    @if (is_numeric($availability))
-                                                                        <span class="badge bg-{{ $hasAvailability ? 'info' : 'danger' }} ms-1 text-white">
-                                                                            Avail: {{ $availability }}
-                                                                        </span>
-                                                                    @endif
                                                                 </small>
                                                             @else
                                                                 <br><small class="text-danger">⚠ No mapping</small>
