@@ -130,16 +130,20 @@
         h('extras[rezgo_adult_qty]').value=adultQty;
         h('extras[rezgo_child_qty]').value=childQty;
 
-        // Grand total — the server-side ecommerce_before_add_to_cart hook reads
-        // extras[rezgo_total] and sets $product->price to this value with qty=1.
-        // This means the cart line item = exactly what the customer saw in the widget.
+        // Grand total — the server-side hook writes this to ec_products.price temporarily.
         h('extras[rezgo_total]').value=grandTotal.toFixed(2);
 
-        // Lock qty to 1 — total cost is embedded in rezgo_total / product price.
-        // Do NOT set qty = adultQty + childQty here: Farmart multiplies price * qty
-        // which would double-count the total.
+        // Send qty = total tickets (adult + child) so cart shows correct count.
+        // The hook sets ec_products.price = grandTotal and qty = totalTickets,
+        // so Farmart's price * qty would double-count. To avoid this, we send
+        // per-ticket blended price and total qty instead.
+        // blended = grandTotal / totalTickets so price * qty = grandTotal exactly.
+        var totalTickets=adultQty+childQty;
+        if(totalTickets<1)totalTickets=1;
+        var blendedPrice=totalTickets>0?grandTotal/totalTickets:grandTotal;
+        h('extras[rezgo_blended_price]').value=blendedPrice.toFixed(2);
         var qtyInput=form.querySelector('input[name="qty"]');
-        if(qtyInput)qtyInput.value=1;
+        if(qtyInput)qtyInput.value=totalTickets;
     }
 
     function rezgoUpdateTotalDisplay(){

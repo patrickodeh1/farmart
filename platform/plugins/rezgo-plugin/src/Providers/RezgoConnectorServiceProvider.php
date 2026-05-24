@@ -164,52 +164,81 @@ class RezgoConnectorServiceProvider extends ServiceProvider
             $request    = request();
             $rezgoUid   = $request->input('extras.rezgo_uid');
             $rezgoTotal = (float) $request->input('extras.rezgo_total', 0);
+            $rezgoDate  = $request->input('extras.rezgo_date');
+
+            // Check if this is a Rezgo product by looking up the mapping
+            $mapping = \Botble\RezgoConnector\Models\RezgoProductMapping::where('product_id', $product->id)
+                ->where('is_active', true)
+                ->first();
+
+            // Block add to cart for Rezgo products without a date selected
+            if ($mapping && empty($rezgoDate)) {
+                throw new \Exception(__('Please select a tour date before adding to cart.'));
+            }
 
             if (!$rezgoUid || $rezgoTotal <= 0) {
                 return; // Not a Rezgo product or no date selected — leave price alone
             }
 
-            $product->price      = round($rezgoTotal, 2);
-            $product->sale_price = null; // clear any sale price
+            // Widget sends blended price (grandTotal / totalTickets) and qty = totalTickets
+            // so Farmart's price * qty = grandTotal exactly, and cart shows correct qty.
+            $blendedPrice = (float) $request->input('extras.rezgo_blended_price', $rezgoTotal);
+            $totalTickets = (int) $request->input('extras.rezgo_adult_qty', 1)
+                          + (int) $request->input('extras.rezgo_child_qty', 0);
+            if ($totalTickets < 1) $totalTickets = 1;
+            $roundedBlended = round($blendedPrice, 2);
+            $productId      = $product->id;
 
-            // qty is already 1 from the widget — enforce it here as well
-            $request->merge(['qty' => 1]);
+            // Every Farmart code path reads price from DB — temporarily write blended price
+            // so HandleApplyProductCrossSaleService and Cart::refresh use correct value.
+            $originalPrice = \Botble\Ecommerce\Models\Product::where('id', $productId)->value('price');
+            \Botble\Ecommerce\Models\Product::where('id', $productId)
+                ->update(['price' => $roundedBlended, 'sale_price' => null]);
+
+            // Restore after request so product page always shows base markup price
+            app()->terminating(function () use ($productId, $originalPrice) {
+                \Botble\Ecommerce\Models\Product::where('id', $productId)
+                    ->update(['price' => $originalPrice]);
+            });
+
+            $product->price            = $roundedBlended;
+            $product->sale_price       = null;
+            $product->front_sale_price = $roundedBlended;
+            $request->merge(['qty' => $totalTickets]);
         });
 
         // Override the price Farmart reads from ProductPrice::getPrice() for Rezgo products.
         // add_action cannot override it because OrderHelper calls $product->price()->getPrice()
         // which goes through this filter — so we intercept here instead.
         add_filter('product_prices_price_value', function ($price, $product) {
-            \Log::info('Rezgo price filter fired', ['price' => $price, 'rezgo_total' => request()->input('extras.rezgo_total'), 'rezgo_uid' => request()->input('extras.rezgo_uid'), 'request_id' => request()->input('id'), 'product_id' => $product->id]);
+            $trace = collect(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 8))->map(fn($f) => ($f['class'] ?? '') . '::' . ($f['function'] ?? '') . ':' . ($f['line'] ?? ''))->implode(' | ');
+            \Log::info('Rezgo price filter fired', ['price' => $price, 'rezgo_total' => request()->input('extras.rezgo_total'), 'product_id' => $product->id, 'trace' => $trace]);
             $rezgoTotal = (float) request()->input('extras.rezgo_total', 0);
             $rezgoUid   = request()->input('extras.rezgo_uid');
-            if (!$rezgoUid || $rezgoTotal <= 0) {
-                return $price;
-            }
-            // Only override for the product being added to cart
-            $requestProductId = (int) request()->input('id');
-            if ($product->id !== $requestProductId) {
-                return $price;
-            }
-            return round($rezgoTotal, 2);
-        }, 10, 2);
-        // After cart item is added, update its price to the Rezgo total.
-        // The product_prices_price_value filter fires multiple times during add-to-cart
-        // (for promotions, related products etc.) so it is unreliable for Cart::add().
-        // Instead we find the just-added item by product ID and overwrite its price directly.
-        add_filter('ecommerce_after_add_to_cart', function ($cartItems) {
-            $rezgoTotal = (float) request()->input('extras.rezgo_total', 0);
-            $rezgoUid   = request()->input('extras.rezgo_uid');
-            $productId  = (int) request()->input('id');
-            if (!$rezgoUid || $rezgoTotal <= 0 || !$productId) return $cartItems;
-            $cart = \Botble\Ecommerce\Facades\Cart::instance('cart');
-            $cart->content()->each(function ($item) use ($cart, $productId, $rezgoTotal) {
-                if ((int)$item->id === $productId) {
-                    $cart->update($item->rowId, ['price' => round($rezgoTotal, 2), 'qty' => 1]);
+
+            // Primary path: live add-to-cart request has rezgo_total in POST data
+            if ($rezgoUid && $rezgoTotal > 0) {
+                $requestProductId = (int) request()->input('id');
+                if ($product->id === $requestProductId) {
+                    return round($rezgoTotal, 2);
                 }
-            });
-            return $cartItems;
-        }, 10, 1);
+            }
+
+            // Secondary path: Cart::refresh() re-reads prices from DB, losing our total.
+            // Recover it from the extras stored in the cart item session.
+            $cart = \Botble\Ecommerce\Facades\Cart::instance('cart');
+            foreach ($cart->content() as $cartItem) {
+                if ((int)$cartItem->id === (int)$product->id) {
+                    $savedTotal = (float)($cartItem->options->extras['rezgo_total'] ?? 0);
+                    if ($savedTotal > 0) {
+                        return round($savedTotal, 2);
+                    }
+                }
+            }
+
+            return $price;
+        }, 10, 2);
+
 
         // Save Rezgo tour date and passenger data when order is placed
         Event::listen(OrderPlacedEvent::class, function ($event) {
