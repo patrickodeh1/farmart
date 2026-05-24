@@ -142,6 +142,7 @@ class RezgoConnectorController extends BaseController
     public function productMappings(): View
     {
         $mappings            = RezgoProductMapping::with('product')->paginate(20);
+        $products            = \DB::table('ec_products')->orderBy('name')->get();
         $rezgoTours          = [];
         $totalInventoryCount = 0;
         $inventoryError      = null;
