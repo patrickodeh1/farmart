@@ -125,25 +125,6 @@ class RezgoConnectorController extends BaseController
             ];
         }
 
-        $products             = \DB::table('ec_products')->orderBy('name')->get();
-        $availabilityResponse = $this->api->searchInventory();
-        $tourAvailability     = [];
-
-        if ($availabilityResponse['success'] && isset($availabilityResponse['data']['item'])) {
-            $items = $availabilityResponse['data']['item'];
-            if (!is_array($items) || !isset($items[0])) {
-                $items = [$items];
-            }
-            foreach ($items as $item) {
-                $uid = $item['uid'] ?? null;
-                if ($uid) {
-                    $tourAvailability[$uid] = [
-                        'name' => $item['name'] ?? $item['item'] ?? $uid,
-                        'availability' => $item['available'] ?? $item['availability'] ?? 0,
-                    ];
-                }
-            }
-        }
 
         // Load tour dates from rezgo_meta (FIX 2 & 3)
         $rezgoMeta = \DB::table('rezgo_meta')
@@ -152,10 +133,8 @@ class RezgoConnectorController extends BaseController
             ->keyBy('order_id');
 
         return view('rezgo::admin.submit-order', [
-            'orders'           => $ordersData,
-            'products'         => $products,
-            'tourAvailability' => $tourAvailability,
-            'rezgoMeta'        => $rezgoMeta,  // add this
+            'orders'    => $ordersData,
+            'rezgoMeta' => $rezgoMeta,
         ]);
     }
 
@@ -163,7 +142,6 @@ class RezgoConnectorController extends BaseController
     public function productMappings(): View
     {
         $mappings            = RezgoProductMapping::with('product')->paginate(20);
-        $products            = \DB::table('ec_products')->orderBy('name')->get();
         $rezgoTours          = [];
         $totalInventoryCount = 0;
         $inventoryError      = null;
