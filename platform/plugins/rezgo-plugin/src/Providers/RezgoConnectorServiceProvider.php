@@ -165,10 +165,9 @@ class RezgoConnectorServiceProvider extends ServiceProvider
         }, 10, 2);
 
         // Override product price with the Rezgo total the customer selected.
-        // The widget computes grandTotal = (adult_qty * adult_price) + (child_qty * child_price)
-        // and sends it as extras[rezgo_total] with qty=1.
-        // We set $product->price = that total and enforce qty=1 so Farmart's
-        // price * qty equals exactly what the customer saw in the calendar.
+        // The widget sends extras[rezgo_total] (grandTotal) and extras[rezgo_blended_price]
+        // (grandTotal / totalTickets). The filter intercepts getPrice() calls and returns
+        // the blended price. RezgoCart::refresh() preserves it across requests.
         add_action('ecommerce_before_add_to_cart', function ($product) {
             $request    = request();
             $rezgoUid   = $request->input('extras.rezgo_uid');
@@ -198,17 +197,6 @@ class RezgoConnectorServiceProvider extends ServiceProvider
             $roundedBlended = round($blendedPrice, 2);
             $productId      = $product->id;
 
-            // Every Farmart code path reads price from DB — temporarily write blended price
-            // so HandleApplyProductCrossSaleService and Cart::refresh use correct value.
-            $originalPrice = \Botble\Ecommerce\Models\Product::where('id', $productId)->value('price');
-            \Botble\Ecommerce\Models\Product::where('id', $productId)
-                ->update(['price' => $roundedBlended, 'sale_price' => null]);
-
-            // Restore after request so product page always shows base markup price
-            app()->terminating(function () use ($productId, $originalPrice) {
-                \Botble\Ecommerce\Models\Product::where('id', $productId)
-                    ->update(['price' => $originalPrice]);
-            });
 
             $product->price            = $roundedBlended;
             $product->sale_price       = null;
