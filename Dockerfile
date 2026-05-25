@@ -10,8 +10,7 @@ COPY . .
 RUN composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-req=ext-calendar
 
 RUN php artisan config:cache && \
-    php artisan route:cache && \
-    php artisan view:cache
+    php artisan route:cache
 
 EXPOSE 80
 
