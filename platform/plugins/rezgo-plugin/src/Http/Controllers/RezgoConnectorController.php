@@ -646,8 +646,7 @@ class RezgoConnectorController extends BaseController
     }
 
     /**
-     * Attach Rezgo images to product inline using correct RvMedia::uploadFromUrl() signature
-     * Uses the 4-argument version with folder ID and mime type
+     * Attach Rezgo images using direct CDN URLs — Railway-safe, no local disk needed.
      */
     private function attachRezgoImages(\Botble\Ecommerce\Models\Product $product, array $photoUrls): void
     {
@@ -655,74 +654,14 @@ class RezgoConnectorController extends BaseController
             return;
         }
 
-        $imageUrls = [];
-        $isFirst   = true;
+        $product->image  = $photoUrls[0];
+        $product->images = json_encode(array_values($photoUrls));
+        $product->save();
 
-        foreach ($photoUrls as $index => $url) {
-            try {
-                \Log::info('Rezgo: Uploading image from URL', [
-                    'url'        => $url,
-                    'product_id' => $product->id,
-                    'index'      => $index,
-                ]);
-
-                // Use correct 4-argument RvMedia signature
-                $result = \Botble\Media\Facades\RvMedia::uploadFromUrl(
-                    $url,
-                    0,            // folderId — 0 = root
-                    'products',   // folder slug
-                    'image/jpeg'  // mime type
-                );
-
-                if ($result['error'] === false && isset($result['data'])) {
-                    $mediaFile = $result['data'];
-                    $fileUrl   = $mediaFile->url ?? null;
-
-                    if ($fileUrl) {
-                        $imageUrls[] = $fileUrl;
-
-                        // Set as featured image on first one
-                        if ($isFirst) {
-                            $product->image = $fileUrl;
-                            $product->save();
-                            \Log::info('Rezgo: Set featured image on product', [
-                                'product_id' => $product->id,
-                                'image_url'  => $fileUrl,
-                            ]);
-                            $isFirst = false;
-                        }
-                    }
-                } else {
-                    \Log::error('Rezgo: RvMedia upload failed', [
-                        'url'        => $url,
-                        'error'      => $result['error'] ?? 'unknown',
-                        'product_id' => $product->id,
-                    ]);
-                }
-            } catch (\Exception $e) {
-                \Log::error('Rezgo: Exception uploading image', [
-                    'url'        => $url,
-                    'error'      => $e->getMessage(),
-                    'product_id' => $product->id,
-                ]);
-            }
-        }
-
-        // Attach to product gallery
-        if (!empty($imageUrls)) {
-            $gallery = [];
-            if ($product->images) {
-                $gallery = is_string($product->images) ? json_decode($product->images, true) : $product->images;
-            }
-
-            $allImages = array_merge($gallery ?: [], $imageUrls);
-            $product->images = json_encode($allImages);
-            $product->save();
-
-            \Log::info('Rezgo: Images attached to product gallery', [
-                'product_id'   => $product->id,
-                'images_count' => count($imageUrls),
-            ]);
-        }
+        \Log::info('Rezgo: Images attached via direct CDN URLs', [
+            'product_id'   => $product->id,
+            'images_count' => count($photoUrls),
+            'first_image'  => $photoUrls[0],
+        ]);
     }
 }
