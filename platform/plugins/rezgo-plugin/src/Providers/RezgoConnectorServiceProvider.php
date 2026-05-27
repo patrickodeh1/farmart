@@ -144,6 +144,69 @@ class RezgoConnectorServiceProvider extends ServiceProvider
             'rezgo-config'
         );
 
+        // Inject "As Low As" + hide price/cart on product cards via ECOMMERCE_PRODUCT_DETAIL_EXTRA_HTML
+        // This fires inside product-cart-form on BOTH listing cards and detail page
+        add_filter('product_detail_extra_html', function ($html, $product = null) {
+            if (!$product || !($product instanceof \Botble\Ecommerce\Models\Product)) {
+                return $html;
+            }
+            $mapping = \Botble\RezgoConnector\Models\RezgoProductMapping::where('product_id', $product->id)
+                ->where('is_active', true)->first();
+            if (!$mapping) return $html;
+            $lowestPrice = $mapping->rezgo_price ?? $product->price ?? 0;
+            if ($lowestPrice <= 0) return $html;
+            $productId   = (int) $product->id;
+            $priceFormatted = number_format($lowestPrice, 2);
+            // Mark this product as a Rezgo product so JS can find it
+            return ($html ?? '')
+                . '<span class="rezgo-product-marker" data-rezgo-id="' . $productId . '" data-rezgo-price="' . $priceFormatted . '" style="display:none"></span>';
+        }, 10, 2);
+
+        // Inject global JS once in footer — handles ALL Rezgo product cards on the page
+        add_filter(THEME_FRONT_FOOTER, function ($html) {
+            $mappings = \Botble\RezgoConnector\Models\RezgoProductMapping::where('is_active', true)
+                ->get(['product_id', 'rezgo_price']);
+            if ($mappings->isEmpty()) return;
+            $data = [];
+            foreach ($mappings as $m) {
+                $data[(int)$m->product_id] = number_format((float)$m->rezgo_price, 2);
+            }
+            echo '<script>
+(function(){
+    var rezgoProducts = ' . json_encode($data) . ';
+    function rezgoTransformCards() {
+        document.querySelectorAll(".rezgo-product-marker").forEach(function(marker) {
+            var pid   = parseInt(marker.getAttribute("data-rezgo-id"));
+            var price = marker.getAttribute("data-rezgo-price");
+            if (!rezgoProducts[pid]) return;
+            if (marker.getAttribute("data-rezgo-done")) return;
+            marker.setAttribute("data-rezgo-done", "1");
+            // Find nearest price element — works on cards and detail page
+            var container = marker.closest(".product-inner, .product-details, .entry-summary, .product-info");
+            var priceEl = container ? container.querySelector(".product-price") : document.querySelector(".product-price");
+            if (!priceEl) return;
+            if (priceEl.previousElementSibling && priceEl.previousElementSibling.classList.contains("rezgo-alp-badge")) return;
+            var badge = document.createElement("div");
+            badge.className = "rezgo-alp-badge";
+            badge.style.cssText = "margin:0 0 4px;line-height:1.4;";
+            badge.innerHTML = "As Low As";
+            priceEl.insertAdjacentElement("beforebegin", badge);
+        });
+    }
+    // Run on DOM ready and after any dynamic loads
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", rezgoTransformCards);
+    } else {
+        rezgoTransformCards();
+    }
+    // Also observe for dynamically loaded cards (sliders, AJAX pagination)
+    var obs = new MutationObserver(rezgoTransformCards);
+    obs.observe(document.body, { childList: true, subtree: true });
+})();
+</script>';
+            return $html;
+        }, 10, 1);
+
         // Register filter to inject Rezgo calendar into product detail page ONLY
         add_filter('ecommerce_after_product_description', function ($content, $product = null) {
             // Product should be passed as second parameter
@@ -198,43 +261,49 @@ class RezgoConnectorServiceProvider extends ServiceProvider
             $productId      = $product->id;
 
 
-            $product->price            = $roundedBlended;
-            $product->sale_price       = null;
-            $product->front_sale_price = $roundedBlended;
+            // Force all price attributes so getPrice(false) always returns blended price
+            $product->price                  = $roundedBlended;
+            $product->sale_price             = $roundedBlended;
+            $product->front_sale_price       = $roundedBlended;
+            $product->price_with_taxes       = $roundedBlended;
+            $product->front_sale_price_with_taxes = $roundedBlended;
             $request->merge(['qty' => $totalTickets]);
-        });
-
-        // Override the price Farmart reads from ProductPrice::getPrice() for Rezgo products.
-        // add_action cannot override it because OrderHelper calls $product->price()->getPrice()
-        // which goes through this filter — so we intercept here instead.
-        add_filter('product_prices_price_value', function ($price, $product) {
-            $rezgoTotal = (float) request()->input('extras.rezgo_total', 0);
-            $rezgoUid   = request()->input('extras.rezgo_uid');
-
-            // Primary path: live add-to-cart request has rezgo_total in POST data
-            if ($rezgoUid && $rezgoTotal > 0) {
-                $requestProductId = (int) request()->input('id');
-                if ($product->id === $requestProductId) {
-                    return round($rezgoTotal, 2);
-                }
-            }
-
-            // Secondary path: Cart::refresh() and checkout re-read prices from DB.
-            // Session stores CartItem objects — access as object properties.
-            $cartSession = session()->get('cart.cart', []);
-            foreach ($cartSession as $item) {
-                if ((int)$item->id === (int)$product->id) {
-                    $extras = is_array($item->options) ? $item->options['extras'] ?? [] : $item->options->extras ?? [];
-                    $savedPrice = (float)($extras['rezgo_blended_price'] ?? 0);
-                    if ($savedPrice > 0) {
-                        return round($savedPrice, 2);
+            // Listen for cart.added to correct the DB price with the Rezgo blended price
+            \Botble\Ecommerce\Facades\Cart::getEventDispatcher()->listen(
+                'cart.added',
+                function ($cartItem) use ($product, $roundedBlended) {
+                    static $fired = false;
+                    if ($fired) return;
+                    $fired = true;
+                    $cart = \Botble\Ecommerce\Facades\Cart::instance('cart');
+                    foreach ($cart->content() as $rowId => $item) {
+                        if ((int)$item->id === (int)$product->id && (float)$item->price !== $roundedBlended) {
+                            $opts = $item->options->toArray();
+                            $cart->removeQuietly($rowId);
+                            $cart->addQuietly(
+                                $item->id,
+                                $item->name,
+                                $item->qty,
+                                $roundedBlended,
+                                $opts
+                            );
+                        }
                     }
+                }
+            );
+        });
+        // Intercept ProductPrice::getPrice() during add-to-cart to return blended price
+        add_filter('product_prices_price_value', function ($price, $product) {
+            $blended = (float) request()->input('_rezgo_blended_price', 0);
+            $rezgoUid = request()->input('extras.rezgo_uid');
+            if ($rezgoUid && $blended > 0) {
+                $requestProductId = (int) request()->input('id');
+                if ((int)$product->id === $requestProductId) {
+                    return $blended;
                 }
             }
             return $price;
         }, 10, 2);
-
-
         // Save Rezgo tour date and passenger data when order is placed
         Event::listen(OrderPlacedEvent::class, function ($event) {
             try {

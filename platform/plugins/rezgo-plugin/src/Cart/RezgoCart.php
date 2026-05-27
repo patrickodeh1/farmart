@@ -10,6 +10,38 @@ use Exception;
 
 class RezgoCart extends Cart
 {
+    public function update(string $rowId, int|\Botble\Ecommerce\Cart\Contracts\Buyable|array $qty): bool|\Botble\Ecommerce\Cart\CartItem|null
+    {
+        $cartItem = $this->get($rowId);
+        // Preserve Rezgo blended price — only allow qty changes, never price changes
+        $rezgoBlended = 0.0;
+        if ($cartItem) {
+            $opts = $cartItem->options->toArray();
+            $rezgoBlended = (float)($opts['extras']['rezgo_blended_price'] ?? 0);
+        }
+        $result = parent::update($rowId, $qty);
+        if ($rezgoBlended > 0 && $result && is_object($result)) {
+            // Re-fetch item (rowId may have changed after update)
+            foreach ($this->content() as $currentRowId => $item) {
+                if ((int)$item->id === (int)$cartItem->id) {
+                    if ($item->price != $rezgoBlended) {
+                        $opts = $item->options->toArray();
+                        $this->removeQuietly($currentRowId);
+                        $this->addQuietly(
+                            $item->id,
+                            $item->name,
+                            $item->qty,
+                            $rezgoBlended,
+                            $opts
+                        );
+                    }
+                    break;
+                }
+            }
+        }
+        return $result;
+    }
+
     public function refresh(): void
     {
         $cart = $this->instance('cart');
